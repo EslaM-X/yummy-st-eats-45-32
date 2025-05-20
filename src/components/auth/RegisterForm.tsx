@@ -27,6 +27,7 @@ interface RegisterFormProps {
 
 const RegisterForm: React.FC<RegisterFormProps> = ({ onSuccess }) => {
   const [loading, setLoading] = useState<boolean>(false);
+  const [registrationError, setRegistrationError] = useState<string | null>(null);
   const { toast } = useToast();
   const { language } = useLanguage();
 
@@ -45,7 +46,30 @@ const RegisterForm: React.FC<RegisterFormProps> = ({ onSuccess }) => {
   // معالجة تسجيل حساب جديد
   const handleRegister = async (values: z.infer<typeof registerSchema>) => {
     setLoading(true);
+    setRegistrationError(null);
+    
     try {
+      // التحقق من وجود البريد الإلكتروني أو اسم المستخدم
+      const { data: existingEmail } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('email', values.email)
+        .maybeSingle();
+        
+      if (existingEmail) {
+        throw new Error("البريد الإلكتروني مستخدم بالفعل");
+      }
+      
+      const { data: existingUsername } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('username', values.username)
+        .maybeSingle();
+        
+      if (existingUsername) {
+        throw new Error("اسم المستخدم مستخدم بالفعل");
+      }
+      
       // تسجيل حساب جديد
       const { data, error } = await supabase.auth.signUp({
         email: values.email,
@@ -62,6 +86,26 @@ const RegisterForm: React.FC<RegisterFormProps> = ({ onSuccess }) => {
       
       if (error) throw error;
       
+      // إنشاء سجل الملف الشخصي
+      if (data.user) {
+        const { error: profileError } = await supabase
+          .from('profiles')
+          .insert({
+            id: data.user.id,
+            email: values.email,
+            username: values.username,
+            full_name: values.fullName,
+            phone: values.phone || null,
+            user_type: values.userType,
+            created_at: new Date().toISOString()
+          });
+          
+        if (profileError) {
+          console.error("خطأ في إنشاء الملف الشخصي:", profileError);
+          throw new Error("فشل في إنشاء الملف الشخصي. يرجى المحاولة مرة أخرى.");
+        }
+      }
+      
       // تسجيل نجاح إنشاء الحساب
       toast({
         title: "تم إنشاء الحساب بنجاح",
@@ -71,7 +115,9 @@ const RegisterForm: React.FC<RegisterFormProps> = ({ onSuccess }) => {
       if (data.user && !data.session) {
         // الحساب يحتاج إلى تأكيد بالبريد الإلكتروني
         if (onSuccess) {
-          onSuccess();
+          setTimeout(() => {
+            onSuccess();
+          }, 2000);
         }
       } else if (data.session) {
         // تم تسجيل الدخول تلقائياً
@@ -79,13 +125,19 @@ const RegisterForm: React.FC<RegisterFormProps> = ({ onSuccess }) => {
       }
     } catch (error: any) {
       // معالجة الأخطاء
-      console.error("Registration error:", error);
+      console.error("خطأ في التسجيل:", error);
       let errorMessage = error.message || "حدث خطأ أثناء إنشاء الحساب. يرجى المحاولة مرة أخرى.";
       
       // رسائل خطأ أكثر تحديداً
       if (error.message?.includes("unique constraint")) {
         errorMessage = "البريد الإلكتروني أو اسم المستخدم مستخدم بالفعل";
+      } else if (error.message?.includes("Password should be")) {
+        errorMessage = "كلمة المرور يجب أن تكون 6 أحرف على الأقل";
+      } else if (error.message?.includes("User already registered")) {
+        errorMessage = "البريد الإلكتروني مسجل بالفعل";
       }
+      
+      setRegistrationError(errorMessage);
       
       toast({
         title: "فشل إنشاء الحساب",
@@ -100,6 +152,12 @@ const RegisterForm: React.FC<RegisterFormProps> = ({ onSuccess }) => {
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit(handleRegister)} className="space-y-4">
+        {registrationError && (
+          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded relative mb-4" role="alert">
+            <span className="block sm:inline">{registrationError}</span>
+          </div>
+        )}
+        
         <FormField
           control={form.control}
           name="email"
